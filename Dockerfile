@@ -1,4 +1,7 @@
 FROM node:24-alpine
+LABEL org.opencontainers.image.source="https://github.com/Foninhoiuri/Macmini_Proxmox_Controler"
+LABEL org.opencontainers.image.title="Mini Control"
+LABEL org.opencontainers.image.description="Mac mini hardware controller for Proxmox and Home Assistant"
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && mkdir /data && chown node:node /data

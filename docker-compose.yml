@@ -1,9 +1,12 @@
+version: "3.8"
 services:
   controller:
-    build: .
-    restart: unless-stopped
+    image: ${CONTROLLER_IMAGE:-ghcr.io/foninhoiuri/macmini_proxmox_controler:latest}
     ports:
-      - "${BIND_IP:-0.0.0.0}:${PORT:-8787}:8787"
+      - target: 8787
+        published: ${PORT:-8787}
+        protocol: tcp
+        mode: host
     environment:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Defina ADMIN_TOKEN no arquivo .env}
       PUBLIC_URL: ${PUBLIC_URL:?Defina PUBLIC_URL com o endereco do LXC}
@@ -14,11 +17,21 @@ services:
     volumes:
       - controller-data:/data
     read_only: true
-    tmpfs:
-      - /tmp:size=16m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
     deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
       resources:
         limits:
           memory: 256M

@@ -42,13 +42,17 @@ O container não precisa de modo privilegiado, acesso ao Docker socket, montagem
 
 ## Implantar pelo Portainer
 
-Em um ambiente **Docker Standalone**, crie ou atualize a stack usando **Repository**:
+O arquivo padrão `docker-compose.yml` é próprio para **Portainer com Docker Swarm**. Ele usa a imagem pronta `ghcr.io/foninhoiuri/macmini_proxmox_controler:latest`, sem build no servidor, restart ou security_opt incompatíveis com Swarm. Crie ou atualize a stack usando **Repository**:
 
 - Repository URL: `https://github.com/Foninhoiuri/Macmini_Proxmox_Controler`
 - Repository reference: `refs/heads/main`
 - Compose path: `docker-compose.yml` (arquivo na raiz, sem `/data/compose/...`)
 
-O repositório fornece `docker-compose.yml` para o caminho padrão do Portainer e `compose.yaml` equivalente para o Docker Compose. Escolha apenas um, sem adicioná-los juntos como arquivos complementares. Ambos usam `deploy.resources.limits.memory` para o limite de 256 MB.
+Para **Docker Standalone com build local**, use `compose.yaml`. Os arquivos têm finalidades diferentes; escolha apenas um, sem adicioná-los juntos como arquivos complementares. Ambos usam `deploy.resources.limits.memory` para o limite de 256 MB.
+
+Cada alteração de código na main inicia o workflow **Testar e publicar imagem**, que roda os testes, valida a stack, constrói a imagem Linux amd64 (Mac Intel), testa o container com volume persistente e publica no GitHub Container Registry. Aguarde o workflow ficar verde antes de implantar.
+
+**Primeira publicação:** o GitHub cria pacotes de container privados por padrão. Abra o pacote **macmini_proxmox_controler → Package settings → Change visibility → Public** para o Portainer baixar sem credenciais. Isso é independente da visibilidade pública do repositório. Se preferir manter a imagem privada, configure no Portainer um registro `ghcr.io` com seu usuário GitHub e um token clássico com `read:packages`; não use ADMIN_TOKEN para autenticar no registro.
 
 Nas variáveis da stack, informe:
 
@@ -62,7 +66,11 @@ Use a chave real do seu arquivo local. O `.env` não está no GitHub e precisa s
 
 Após atualizar o repositório, solicite ao Portainer a atualização/reimplantação da stack a partir do Git. Se receber “docker-compose.yml: no such file”, confira o **Compose path** e se a revisão mais recente foi baixada. Não é necessário criar manualmente o diretório interno `/data/compose/41`.
 
-Esta configuração faz build da imagem a partir do código. **Docker Swarm não executa esse build**: nesse caso seria necessário publicar uma imagem previamente e usar uma configuração própria para Swarm.
+A stack usa uma única réplica no nó manager e atualização stop-first, para impedir dois processos escrevendo no mesmo volume. A porta é publicada no próprio nó que executa o serviço. O `BIND_IP` se aplica apenas ao Compose standalone; no Swarm controle o acesso pela rede/firewall.
+
+Em um Swarm com vários managers, acrescente uma restrição `node.hostname == NOME_DO_SEU_NO` para manter o serviço no nó que contém o volume local, ou prepare armazenamento compartilhado antes de permitir movimentação. Esta configuração pressupõe seu LXC como único manager.
+
+Para fixar uma versão, configure a variável `CONTROLLER_IMAGE` com a tag `ghcr.io/foninhoiuri/macmini_proxmox_controler:sha-COMMIT_COMPLETO` mostrada no resumo do workflow. A tag `latest` só muda depois dos testes e publicação bem-sucedidos.
 
 ## Escolher as portas de comunicação
 

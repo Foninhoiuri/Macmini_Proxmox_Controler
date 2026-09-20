@@ -1,0 +1,91 @@
+name: Testar e publicar imagem
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - server/**
+      - public/**
+      - agent/**
+      - tests/**
+      - docker-compose.yml
+      - .github/workflows/publish-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-controller-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: ghcr.io/foninhoiuri/macmini_proxmox_controler
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Preparar Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Preparar Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Verificar API, MQTT e agente
+        run: |
+          npm ci
+          npm test
+          python -B -m unittest discover -s tests -p test_agent.py -v
+          bash -n agent/install.sh
+          bash -n agent/uninstall.sh
+      - name: Validar stack Swarm
+        env:
+          ADMIN_TOKEN: ci-placeholder-for-configuration-only
+          PUBLIC_URL: http://127.0.0.1:18787
+          PORT: "18787"
+        run: docker stack config -c docker-compose.yml > /dev/null
+      - name: Construir imagem Linux amd64
+        run: |
+          docker build --pull --tag "$IMAGE:latest" --tag "$IMAGE:sha-$GITHUB_SHA" .
+      - name: Testar imagem e volume persistente
+        run: |
+          test_token="$(openssl rand -hex 32)"
+          docker run -d --name mini-control-smoke --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --memory 256m \
+            -e ADMIN_TOKEN="$test_token" \
+            -v mini-control-smoke-data:/data \
+            -p 127.0.0.1:18787:8787 "$IMAGE:latest"
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:18787/healthz; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18787/healthz
+          curl --fail --silent -H "Authorization: Bearer $test_token" http://127.0.0.1:18787/api/state > /dev/null
+          docker exec mini-control-smoke node -e "const fs=require('node:fs');fs.accessSync('/data/controller.json',fs.constants.R_OK|fs.constants.W_OK);if(process.getuid()===0)process.exit(1)"
+      - name: Autenticar no registro GitHub
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publicar imagem
+        run: |
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+          printf 'Imagem publicada: `%s:latest`\n\nTag fixa: `%s:sha-%s`\n' "$IMAGE" "$IMAGE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Limpar teste
+        if: always()
+        run: |
+          docker logs mini-control-smoke 2>/dev/null || true
+          docker rm -f mini-control-smoke 2>/dev/null || true
+          docker volume rm mini-control-smoke-data 2>/dev/null || true
