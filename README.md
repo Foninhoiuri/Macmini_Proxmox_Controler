@@ -4,6 +4,20 @@ Painel local para o hardware de um **Mac mini Intel com Proxmox**, com instalaç
 
 O painel roda em Docker dentro do LXC. Um agente Python roda diretamente no host Proxmox, lê os sensores e executa apenas ações previstas. O agente não abre portas: conecta-se ao painel a cada 5 segundos.
 
+## Interface 0.2
+
+- Dashboard única, sem barra lateral; cartões abrem janelas de controles. Escape fecha a janela.
+- Sensores, inventário, portas e diagnósticos ficam em seções expansíveis.
+- Notificações distinguem envio, confirmação do agente, falha, expiração e resultado desconhecido. Falhas permanecem até dispensar. Os resultados de comandos ficam em **Atividade**, inclusive depois de fechar a notificação.
+- **Gerenciar agente → Desinstalar agente** mostra o comando, o backup e a revogação do vínculo. A remoção continua sendo executada pelo administrador no Shell do Proxmox; o painel não executa shell remoto.
+- O cartão de temperatura usa o sensor **coretemp da CPU**; o gráfico mantém o histórico da maior leitura bruta, explicitamente identificado. Nenhum sensor SMC é descartado.
+- Se um sensor SMC informa pelo menos 85 °C e está 30 °C ou mais acima do coretemp, a API bloqueia novas curvas Equilibrado/Resfriar para revisão. É uma precaução, não um diagnóstico de sensor defeituoso. O agente e o controlador térmico existente não são parados automaticamente. Uma curva já ativa no agente não é alterada por esse bloqueio do painel.
+- O último conflito reportado com outro controlador (por exemplo, macfanctld) aparece em destaque. Isso registra o resultado da tentativa anterior, não uma consulta contínua ao systemd.
+
+Esta atualização é do **painel** e funciona com o agente 0.1 já instalado. Atualize a imagem no Portainer, preservando o volume e a ADMIN_TOKEN; não é necessário reinstalar o agente. Confira `version: 0.2.0` em `/healthz` após implantar. A validação física dos sensores e a troca de controlador continuam pendentes; não desative macfanctld apenas para liberar os controles.
+
+As duas fotos fornecidas pelo usuário são carregadas diretamente de Pacific Macs, sem envio de credenciais (`no-referrer`). Exigem que o navegador tenha acesso a esse site; sem acesso, o painel continua funcional. A vista traseira é ilustrativa e não representa detecção individual das portas ocupadas.
+
 ## Comece pelo Docker no LXC
 
 Requisitos: Docker Engine + Compose no LXC, saída de rede para baixar a imagem/dependências durante o build, e um endereço que o host Proxmox consiga acessar. Este projeto não instala nem reconfigura o Docker.

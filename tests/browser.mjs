@@ -1,4 +1,4 @@
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,27 +15,64 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try{
   await page.goto(base);await page.getByText('Explorar demonstração',{exact:true}).click();
   await page.getByRole('heading',{name:'Visão geral',exact:true}).waitFor();
+  await expect.poll(()=>page.locator('.device-photo img').evaluate(img=>img.complete),{timeout:15000}).toBe(true);
   fs.mkdirSync('test-results',{recursive:true});
   await page.screenshot({path:'test-results/dashboard-desktop.png',fullPage:true});
   for(const title of ['Controle térmico','Energia e desempenho','Periféricos','Home Assistant','Instalação e arquivos','Atividade']){
-    await page.locator('nav').getByRole('button',{name:title,exact:true}).click();
-    await page.getByRole('heading',{name:title,exact:true}).waitFor();
+    const target={'Controle térmico':'cooling','Energia e desempenho':'energy','Periféricos':'devices','Home Assistant':'home','Instalação e arquivos':'install','Atividade':'events'}[title];
+    await page.locator('.shortcuts [data-page="'+target+'"]').click();
+    await page.getByRole('dialog').getByRole('heading',{name:title,exact:true}).waitFor();
+    if(target==='cooling'){
+      await page.locator('[data-disclosure="sensors"] summary').click();
+      await page.screenshot({path:'test-results/cooling-modal.png'});
+    }
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('dialog[open]').count(),0);
   }
   await page.getByRole('button',{name:'Sair da demo',exact:true}).click();
   await page.locator('#token').fill(token);
   await page.getByRole('button',{name:/Acessar painel/}).click();
   await page.getByRole('heading',{name:'Visão geral',exact:true}).waitFor();
-  await page.locator('nav').getByRole('button',{name:'Instalação e arquivos',exact:true}).click();
+  await page.getByRole('button',{name:'Gerenciar agente',exact:true}).click();
   await page.locator('#public-url').fill(base);
   await page.getByRole('button',{name:'Gerar comando de instalação',exact:true}).click();
   await page.locator('#pair-command').waitFor();
   assert.ok((await page.locator('#pair-command').innerText()).includes('curl'));
-  await page.screenshot({path:'test-results/installation-desktop.png',fullPage:true});
+  await page.screenshot({path:'test-results/installation-desktop.png'});
+  await page.getByRole('button',{name:'Desinstalar agente',exact:true}).click();
+  await expect(page.locator('#remove-command')).toContainText('bash /opt/macmini-controller/uninstall.sh');
+  await expect(page.getByRole('button',{name:'Revogar vínculo após remoção'})).toBeDisabled();
+  await page.keyboard.press('Escape');
+  app.store.state.hosts.test={id:'test',name:'Mac de teste',seen:Date.now(),telemetry:{version:'0.1.0',temperatures:[{driver:'coretemp',label:'CPU',value:53},{driver:'applesmc',label:'TCPG',value:103}],fans:[{rpm:2000,min:2000,max:5500}],inventory:[],radios:[],usb:[],capabilities:{fan:true,cpu:true},cpuProfile:'original',fanProfile:'automatic',cpu:{noTurbo:0,maxPerformance:100}}};
+  await page.reload();
+  await page.locator('.shortcuts [data-page="cooling"]').click();
+  await expect(page.getByText('Leituras divergentes — validação necessária')).toBeVisible();
+  await expect(page.locator('[data-action="fan.profile"][data-value="cool"]')).toBeDisabled();
+  await page.locator('[data-action="fan.profile"][data-value="maximum"]').click();
+  await expect.poll(()=>app.store.state.commands.length).toBe(1);
+  const failed=app.store.state.commands[0];failed.status='failed';failed.message='Outro controlador térmico está ativo: macfanctld';
+  await expect(page.locator('.notification.error')).toContainText('macfanctld',{timeout:10000});
+  assert.equal(await page.locator('#detail-dialog #toast').count(),1,'Notificação precisa estar na camada do modal');
+  await expect(page.getByText('O último ajuste da ventoinha falhou')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.locator('[data-profile="cpu"]').selectOption('eco');
+  await expect.poll(()=>app.store.state.commands.length).toBe(2);
+  app.store.state.commands[0].status='done';app.store.state.commands[0].message='Aplicado no host';
+  await expect(page.locator('.notification.success')).toContainText('Energia: aplicado',{timeout:10000});
+  await page.locator('.shortcuts [data-page="home"]').click();
+  await page.locator('#mqtt-url').fill('mqtt://rascunho.local:1883');
+  await page.waitForTimeout(5500);
+  await expect(page.locator('#mqtt-url')).toHaveValue('mqtt://rascunho.local:1883');
+  await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'Sair',exact:true}).click();
   await page.getByText('Explorar demonstração',{exact:true}).click();
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'test-results/dashboard-mobile.png',fullPage:true});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Layout excedeu a tela mobile');
+  await page.locator('.shortcuts [data-page="install"]').click();
+  await page.getByRole('button',{name:'Desinstalar agente',exact:true}).click();
+  await page.screenshot({path:'test-results/removal-mobile.png'});
+  assert.ok(await page.locator('#detail-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),'Modal excedeu a tela mobile');
   assert.deepEqual(errors,[]);
-  console.log('Interface: login, demo, 7 páginas, pareamento, desktop e mobile verificados.');
+  console.log('Interface: dashboard, 7 modais, Escape, sensores, notificações reais, rascunhos, remoção, desktop e mobile verificados.');
 }finally{await browser.close();await app.close();fs.rmSync(dir,{recursive:true});}

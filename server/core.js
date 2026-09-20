@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { thermalAssessment } from '../public/hardware.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 export const secret = () => crypto.randomBytes(32).toString('hex');
 export const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 export function matches(value, digest) {
@@ -52,6 +53,7 @@ export function validateAction(action, args, telemetry) {
     case 'fan.profile':
       requireValue(caps.fan, 'Controle da ventoinha não disponível.');
       choice(['automatic', 'balanced', 'cool', 'maximum']);
+      requireValue(!['balanced', 'cool'].includes(args.profile) || !thermalAssessment(telemetry).needsReview, 'Leituras térmicas divergentes: valide os sensores antes de ativar uma curva. O controlador atual foi preservado.', 409);
       return { profile: args.profile };
     case 'cpu.profile':
       requireValue(caps.cpu, 'Controle Intel P-state não disponível.');

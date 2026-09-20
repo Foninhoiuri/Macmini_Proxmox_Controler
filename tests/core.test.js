@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store, enqueue, publicUrl, hash, matches, shellQuote, validateAction } from '../server/core.js';
 import { discovery } from '../server/mqtt.js';
+import { thermalAssessment, commandOutcome } from '../public/hardware.js';
 
 const telemetry = { capabilities: {fan:true,cpu:true,radios:true,usb:true}, radios:[{type:'wifi'}],usb:[{id:'1-1',controllable:false}],temperatures:[{id:'cpu',label:'CPU',value:50}],fans:[{id:'fan1',rpm:2000}] };
 test('autenticação não aceita token diferente',()=>{assert.equal(matches('a',hash('b')),false);assert.equal(matches('a',hash('a')),true);assert.equal(matches(undefined,hash('a')),false);});
@@ -36,3 +37,20 @@ test('discovery possui IDs estáveis e disponibilidade composta',()=>{
   assert.ok(!discovery({id:'test',name:'Mini',telemetry:{capabilities:{}}},'base').some(i=>i.topic.includes('/select/')));
 });
 test('shell quoting não interpola valores',()=>{assert.equal(shellQuote("a'b"),"'a'\\''b'");assert.equal(shellQuote('$(reboot)'),"'$(reboot)'");});
+test('sensores divergentes são preservados e bloqueiam curvas sem afirmar sensor defeituoso',()=>{
+  const t={...telemetry,temperatures:[{driver:'coretemp',value:53},{driver:'applesmc',label:'TCPG',value:103}]};
+  assert.equal(thermalAssessment(t).cpuTemperature,53);
+  assert.equal(thermalAssessment(t).needsReview,true);
+  assert.equal(t.temperatures[1].value,103);
+  assert.throws(()=>validateAction('fan.profile',{profile:'cool'},t),/divergentes/);
+  assert.throws(()=>validateAction('fan.profile',{profile:'balanced'},t),/divergentes/);
+  assert.deepEqual(validateAction('fan.profile',{profile:'automatic'},t),{profile:'automatic'});
+  assert.deepEqual(validateAction('fan.profile',{profile:'maximum'},t),{profile:'maximum'});
+  assert.equal(thermalAssessment({temperatures:[{driver:'coretemp',value:95},{driver:'applesmc',value:100}]}).needsReview,false);
+});
+test('notificações distinguem confirmação, falha e resultado desconhecido',()=>{
+  assert.equal(commandOutcome({action:'cpu.profile',status:'done'}).kind,'success');
+  assert.match(commandOutcome({action:'fan.profile',status:'failed',message:'macfanctld ativo'}).message,/macfanctld/);
+  assert.equal(commandOutcome({action:'fan.profile',status:'unknown'}).kind,'error');
+  assert.match(commandOutcome({action:'fan.profile',status:'unknown'}).message,/sem confirmação/);
+});

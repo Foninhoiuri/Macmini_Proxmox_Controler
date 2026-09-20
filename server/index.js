@@ -49,7 +49,7 @@ export async function createApp(options = {}) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://pacificmacs.com; connect-src 'self'; frame-ancestors 'none'");
     try {
       const url = new URL(req.url, 'http://localhost'), route = url.pathname;
       if (req.method === 'GET' && route === '/healthz') return send(res, 200, { ok: true, version: VERSION });
@@ -124,12 +124,20 @@ export async function createApp(options = {}) {
           res.setHeader('Set-Cookie', 'mc_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
           return send(res, 200, { ok: true });
         }
-        if (route === '/api/state' && req.method === 'GET') return send(res, 200, {
+        if (route === '/api/state' && req.method === 'GET') {
+          let changed = false;
+          for (const cmd of store.state.commands) if (['queued', 'sent'].includes(cmd.status) && cmd.expires < Date.now()) {
+            cmd.status = cmd.status === 'queued' ? 'expired' : 'unknown'; changed = true;
+            store.event('warning', cmd.action + ': ' + (cmd.status === 'expired' ? 'expirou sem envio' : 'resultado não confirmado'), cmd.hostId);
+          }
+          if (changed) store.save();
+          return send(res, 200, {
           version: VERSION, hosts: Object.values(store.state.hosts).map(cleanHost),
           events: store.state.events, commands: store.state.commands, history: store.state.history,
           publicUrl: store.state.publicUrl || process.env.PUBLIC_URL || '',
           mqtt: { status: bridge.status, error: bridge.error, url: (store.state.mqtt || config)?.url || '', username: (store.state.mqtt || config)?.username || '', hasPassword: Boolean((store.state.mqtt || config)?.password), base: bridge.base },
-        });
+          });
+        }
         if (route === '/api/pair' && req.method === 'POST') {
           const payload = await body(req);
           const origin = publicUrl(payload.url, process.env.REQUIRE_HTTPS === '1');
@@ -169,6 +177,7 @@ export async function createApp(options = {}) {
       }
       if (req.method === 'GET') {
         const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
+        for (const file of ['dashboard.js', 'hardware.js', 'dashboard.css']) assets['/' + file] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
         if (assets[route]) {
           const [file, type] = assets[route]; return send(res, 200, fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'), type);
         }

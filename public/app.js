@@ -1,3 +1,5 @@
+import { dashboard, compactSection, removal } from './dashboard.js';
+import { thermalAssessment, terminalStatuses, commandOutcome } from './hardware.js';
 const $ = selector => document.querySelector(selector);
 const app = $('#app');
 const icons = {
@@ -23,21 +25,48 @@ const icons = {
 };
 const icon = name => '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icons[name] || icons.grid) + '</svg>';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const titles = { overview:'Visão geral', cooling:'Controle térmico', energy:'Energia e desempenho', devices:'Periféricos', home:'Home Assistant', install:'Instalação e arquivos', events:'Atividade' };
-let page = 'overview', state = null, demo = false, pairing = null, chartRange = 60, busy = false, toastTimer, selectedHost = null;
+const titles = { overview:'Visão geral', cooling:'Controle térmico', energy:'Energia e desempenho', devices:'Periféricos', home:'Home Assistant', install:'Instalação e arquivos', events:'Atividade', remove:'Desinstalar agente' };
+let page = 'overview', state = null, demo = false, pairing = null, chartRange = 60, busy = false, selectedHost = null;
 const host = () => state?.hosts.find(h => h.id === selectedHost && !h.revoked) || state?.hosts.find(h => !h.revoked);
 const telemetry = () => host()?.telemetry || {};
 const connected = () => Boolean(host()?.online);
 const disabled = cap => !connected() || !telemetry().capabilities?.[cap] ? 'disabled' : '';
 const labelProfile = value => ({automatic:'Automático',balanced:'Equilibrado',cool:'Resfriar',maximum:'Máximo · 5 min',original:'Original',eco:'Econômico',performance:'Desempenho'}[value] || value);
 const dt = value => value ? new Date(value).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
-function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('show'), 4800); }
+let previousCommands = null, apiFailed = false, formDirty = false, modalOpener = null;
+function toast(message, kind = 'info') {
+  const item = document.createElement('div'); item.className = 'notification ' + kind;
+  item.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  const text = document.createElement('span'); text.textContent = message;
+  const close = document.createElement('button'); close.textContent = '×'; close.setAttribute('aria-label','Dispensar notificação'); close.onclick = () => item.remove();
+  item.append(text, close); $('#toast').append(item);
+  while ($('#toast').children.length > 5) $('#toast').firstElementChild.remove();
+  if (kind !== 'error') setTimeout(() => item.remove(), kind === 'success' ? 9000 : 6000);
+}
+function observeState(next) {
+  if (previousCommands) {
+    for (const cmd of next.commands) if (terminalStatuses.has(cmd.status) && previousCommands.get(cmd.id) !== cmd.status) {
+      const outcome = commandOutcome(cmd); toast(outcome.message, outcome.kind);
+    }
+    for (const h of next.hosts) {
+      const before = state?.hosts.find(old => old.id === h.id);
+      if (before && !h.revoked && before.online !== h.online) toast(h.online ? 'Agente conectado novamente.' : 'Agente perdeu contato. Controles bloqueados.', h.online ? 'success' : 'error');
+    }
+    if (state?.mqtt.status !== next.mqtt.status) {
+      if (next.mqtt.status === 'connected') toast('Conexão MQTT confirmada. Home Assistant pode descobrir as entidades.', 'success');
+      if (next.mqtt.status === 'offline') toast('MQTT sem conexão. ' + (next.mqtt.error || 'Confira o broker.'), 'error');
+    }
+  }
+  previousCommands = new Map(next.commands.map(c => [c.id,c.status]));
+}
 async function api(route, data) {
   const res = await fetch('/api/' + route, { method: data === undefined ? 'GET' : 'POST', headers: {'Content-Type':'application/json'}, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
   const value = await res.json(); if (!res.ok) throw Object.assign(new Error(value.error), {status:res.status}); return value;
 }
 function login(error = '') {
+  if ($('#toast')) document.body.append($('#toast'));
   state = null;
+  previousCommands = null; formDirty = false; document.body.classList.remove('modal-open');
   app.innerHTML = '<main class="login"><section class="login-card"><div class="brand"><span class="brand-logo">M</span><span>mini control<span class="muted">.</span></span></div><div class="kicker">Hardware, em sintonia</div><h1>Seu Mac mini.<br>Sob seu controle.</h1><p>Temperatura, energia e automações em um só lugar. Conecte seu agente para começar.</p><form id="login-form"><label for="token">Chave de acesso do painel</label><input id="token" type="password" autocomplete="current-password" placeholder="Sua ADMIN_TOKEN" required><button class="primary">Acessar painel ' + icon('arrow') + '</button><div class="error">' + esc(error) + '</div></form><button class="ghost demo-btn" data-do="demo">Explorar demonstração</button><small>Primeiro acesso? Use a chave definida no arquivo .env do Docker. A instalação do agente começa dentro do painel.</small></section></main>';
 }
 function demoState() {
@@ -56,42 +85,48 @@ function demoState() {
     {at:now-520000,kind:'install',message:'Inventário verificado. Todos os arquivos íntegros.'},
   ],mqtt:{status:'connected',url:'mqtt://192.168.1.50:1883',username:'mini-control',base:'macmini/demonstracao',hasPassword:true}};
 }
-function navButton(id, symbol) { return '<button data-page="' + id + '" class="' + (page===id?'active':'') + '" title="' + titles[id] + '">' + icon(symbol) + '<span>' + titles[id] + '</span></button>'; }
 function render() {
   if (!state) return login();
   const h = host();
-  app.innerHTML = '<div class="layout"><aside class="sidebar"><div class="brand"><span class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 18V6l9 8 9-8v12"/></svg></span><span>mini control.</span></div><div class="eyebrow">Workspace</div><nav class="nav">' + navButton('overview','grid')+navButton('cooling','fan')+navButton('energy','bolt')+navButton('devices','plug') + '</nav><div class="eyebrow">Conexões</div><nav class="nav">' + navButton('home','home')+navButton('install','folder')+navButton('events','clock') + '</nav><div class="sidebar-bottom"><div class="host-mini"><div class="row">' + icon('server') + '<div><strong>' + esc(h?.name || 'Seu Mac mini') + '</strong><small><span class="dot ' + (connected()?'online':'') + '"></span> ' + (connected()?'Agente conectado':'Aguardando instalação') + '</small></div></div></div><div class="footer-version"><span>MINI CONTROL</span><span>v' + esc(state.version) + '</span></div></div></aside><main class="main"><header class="topbar"><div class="breadcrumbs">Workspace <span>/</span> <strong>' + titles[page] + '</strong></div><div class="top-actions"><span class="status-detail"><span class="dot ' + (connected()?'online':'') + '"></span>' + (demo?'Ambiente de demonstração':connected()?'Monitoramento ativo':'Sem agente conectado') + '</span><button class="ghost mini-button" data-do="logout">' + (demo?'Sair da demo':'Sair') + '</button><span class="avatar">MC</span></div></header><div class="content">' + (demo?'<div class="banner">Demonstração · dados ilustrativos. Os comandos não afetam nenhum equipamento.<button class="mini-button" data-do="logout">Conectar meu Mac</button></div>':'') + header() + content() + '<footer class="bottom-caption"><span>' + icon('shield') + ' Controle local. Hardware identificado antes de qualquer ação.</span><span>' + (demo?'Dados de exemplo':h?'Último contato: '+dt(h.seen):'Pronto para o seu primeiro agente') + '</span></footer></div></main></div>';
+  const detailState = new Map([...document.querySelectorAll('details[data-disclosure]')].map(d => [d.dataset.disclosure,d.open]));
+  if (!$('#dashboard-main')) {
+    app.innerHTML = '<main class="single-workspace"><header class="workspace-header"><div class="brand"><span class="brand-logo">M</span><span>mini control.</span></div><div class="top-actions"><span id="connection-label" class="status-detail"></span><button class="ghost mini-button" data-do="logout">'+(demo?'Sair da demo':'Sair')+'</button></div></header><div class="content"><div id="demo-label"></div><section class="page-head"><div><div class="kicker">SEU MAC, EM SINTONIA</div><h1>Visão geral</h1><p>O essencial à vista. Os detalhes, quando você precisar.</p></div><button data-page="install">'+icon('settings')+' Gerenciar agente</button></section><div id="dashboard-main"></div></div></main><dialog id="detail-dialog" aria-labelledby="dialog-title"><header class="dialog-header"><div><small>MINI CONTROL</small><h2 id="dialog-title"></h2></div><button data-do="close-modal" aria-label="Fechar janela">×</button></header><div id="dialog-body"></div></dialog>';
+    $('#detail-dialog').addEventListener('cancel', event => { event.preventDefault(); closeModal(); });
+  }
+  $('#connection-label').innerHTML = '<span class="dot '+(connected()?'online':'')+'"></span>'+(demo?'Demonstração':connected()?'Agente conectado':'Sem contato com o agente');
+  $('#demo-label').innerHTML = demo ? '<div class="banner">Demonstração · dados ilustrativos. Nenhuma ação afeta seu Mac.</div>' : '';
+  const active = document.activeElement;
+  if (!['SELECT','INPUT'].includes(active?.tagName) || !$('#dashboard-main').contains(active)) {
+    $('#dashboard-main').innerHTML = dashboard({state,h,demo,esc,icon,dt,labelProfile,chart,profileSelect,chartRange,events});
+  }
+  const dialog = $('#detail-dialog');
+  if (page !== 'overview') {
+    const changed = dialog.dataset.page !== page;
+    if (changed || (!formDirty && !['INPUT','SELECT','TEXTAREA'].includes(active?.tagName))) {
+      const scroll = changed ? 0 : $('#dialog-body').scrollTop;
+      const focusedDisclosure = active?.closest('details')?.dataset.disclosure;
+      $('#dialog-title').textContent = titles[page];
+      $('#dialog-body').innerHTML = page === 'remove' ? removal(h,esc) : compactSection(page,content(),telemetry(),state.commands.filter(c => c.hostId === h?.id),esc);
+      dialog.dataset.page = page;
+      $('#dialog-body').scrollTop = scroll;
+      if (focusedDisclosure) $('#dialog-body').querySelector('[data-disclosure="'+focusedDisclosure+'"] summary')?.focus({preventScroll:true});
+    }
+    if (!dialog.open) { dialog.showModal(); document.body.classList.add('modal-open'); }
+    dialog.append($('#toast'));
+  } else if (dialog.open) { document.body.append($('#toast')); dialog.close(); document.body.classList.remove('modal-open'); }
+  for (const d of document.querySelectorAll('details[data-disclosure]')) if (detailState.has(d.dataset.disclosure)) d.open = detailState.get(d.dataset.disclosure);
+  for (const select of document.querySelectorAll('[data-profile="fan"]')) for (const option of select.options) if (['balanced','cool'].includes(option.value)) option.disabled = thermalAssessment(telemetry()).needsReview;
 }
-function header() {
-  const descriptions = {
-    overview:'Um olhar sobre a saúde física do seu servidor.',
-    cooling:'Sensores do SMC e resfriamento sob medida para o seu Mac.',
-    energy:'Equilibre consumo, temperatura e desempenho do hardware.',
-    devices:'Rádios, áudio e dispositivos conectados ao seu Mac mini.',
-    home:'Leve os sensores e controles para as suas automações.',
-    install:'Saiba o que está instalado, onde está e como remover.',
-    events:'Instalações, comandos e mudanças. Tudo registrado.',
-  };
-  return '<section class="page-head"><div><div class="kicker"><span class="dot ' + (connected()?'online':'') + '"></span>MAC MINI CONTROLLER</div><h1>' + titles[page] + '</h1><p>' + descriptions[page] + '</p></div>' + (page==='overview'?'<button data-page="install">' + icon('settings') + ' Gerenciar agente</button>':'<span class="pill '+(connected()?'':'gray')+'">'+(connected()?'● Conectado':'○ Offline')+'</span>')+'</section>';
-}
-function stat(label, value, unit, note, symbol, good=false) { return '<div class="card stat"><div class="stat-top">'+label+icon(symbol)+'</div><div class="stat-value">'+esc(value)+'<span>'+unit+'</span></div><div class="stat-note '+(good?'good':'')+'">'+(good?'<span class="dot online"></span>':'')+esc(note)+'</div></div>'; }
-function overview() {
-  const t = telemetry(), temps=(t.temperatures||[]).map(s=>s.value).filter(Number.isFinite), hottest=temps.length?Math.max(...temps):null;
-  const files=t.inventory||[], drift=files.some(f=>f.status!=='ok'), history=state.history[host()?.id]||[];
-  return (!host()?'<div class="banner">Seu painel está pronto. Instale o agente no Shell do Proxmox para descobrir os recursos físicos.<button data-page="install" class="mini-button">Conectar agente '+icon('arrow')+'</button></div>':'') +
-    (!connected()&&host()?'<div class="banner">Agente sem contato. Os valores abaixo são a última leitura; os controles estão bloqueados.</div>':'') +
-    '<div class="stats">'+stat('Maior temperatura',hottest?.toFixed(1)||'—','°C',temps.length+' sensores detectados','temp',hottest!==null&&hottest<75)+stat('Ventoinha',t.fans?.[0]?.rpm?.toLocaleString('pt-BR')||'—','RPM',labelProfile(t.fanProfile||'automatic'),'fan')+stat('Perfil de energia',t.cpuProfile?labelProfile(t.cpuProfile):'—','',t.cpu?.maxPerformance!==undefined?'Limite de desempenho: '+t.cpu.maxPerformance+'%':'Aguardando hardware','bolt')+stat('Arquivos do agente',files.length?files.length:'—','arquivos',files.length?(drift?'Alterações detectadas':'Inventário íntegro'):'Nenhuma instalação','folder',files.length&&!drift)+'</div>'+
-    '<div class="dashboard-grid"><section class="card chart-card"><div class="card-head"><div><h2>Pulso térmico</h2><p>Temperatura e resposta da ventoinha ao longo do tempo</p></div><div class="chart-controls">'+[60,360,1440].map(n=>'<button data-range="'+n+'" class="'+(chartRange===n?'selected':'')+'">'+({60:'1h',360:'6h',1440:'24h'}[n])+'</button>').join('')+'</div></div><div class="legend"><span><i></i>Temperatura</span><span><i class="green"></i>Ventoinha</span></div>'+chart(history)+'<div class="chart-foot"><span>ATUALIZAÇÃO A CADA 5 SEGUNDOS</span><span>Histórico · até 24 horas</span></div></section>'+
-    '<section class="card device-card"><div class="card-head"><div><h2>Pequeno. Incansável.</h2><p>'+esc(t.model||'Mac mini · Intel')+'</p></div>'+icon('server')+'</div><div class="device-scene"><div class="mac-mini">'+icon('chip')+'</div></div><div class="device-meta"><span>HARDWARE<strong>Mac mini 2012</strong></span><span>CONEXÃO<strong>Proxmox → agente</strong></span></div></section>'+
-    '<section class="card"><div class="card-head"><div><h2>Ajustes rápidos</h2><p>O essencial, sem sair daqui</p></div>'+icon('settings')+'</div><div class="control-row"><div class="control-label"><span class="icon-box">'+icon('fan')+'</span><div><strong>Resfriamento</strong><small>Curva local independente do painel</small></div></div>'+profileSelect('fan','fan',t.fanProfile||'automatic',['automatic','balanced','cool','maximum'])+'</div><div class="control-row"><div class="control-label"><span class="icon-box">'+icon('bolt')+'</span><div><strong>Energia</strong><small>Limite físico do processador</small></div></div>'+profileSelect('cpu','cpu',t.cpuProfile||'original',['original','eco','balanced','performance'])+'</div></section>'+
-    '<section class="card"><div class="card-head"><div><h2>Sua casa, conectada</h2><p>Automatize a partir do estado do seu Mac</p></div></div><div class="integration-box"><span class="ha-logo">'+icon('home')+'</span><div><h3>Home Assistant</h3><p>Descoberta automática por MQTT</p></div></div><div class="integration-bottom"><span class="pill '+(state.mqtt.status==='connected'?'':'gray')+'">'+mqttLabel()+'</span><button class="mini-button" data-page="home">Configurar '+icon('arrow')+'</button></div></section>'+
-    '<section class="card wide"><div class="card-head"><div><h2>Últimos acontecimentos</h2><p>Um histórico do que mudou no seu hardware</p></div><button class="ghost mini-button" data-page="events">Ver atividade '+icon('arrow')+'</button></div>'+events(state.events.slice(0,3))+'</section></div>';
+function closeModal() {
+  page = 'overview'; formDirty = false; render();
+  if (modalOpener) document.querySelector('[data-page="'+modalOpener+'"]')?.focus({preventScroll:true});
 }
 function chart(history) {
   const points=history.filter(p=>p.at>Date.now()-chartRange*60000), w=620,h=155;
-  const grid=[30,50,70,90].map(v=>{const y=140-(v-20)/80*130;return '<line x1="28" y1="'+y+'" x2="605" y2="'+y+'" stroke="#edf0e8" stroke-dasharray="3 5"/><text x="0" y="'+(y+3)+'">'+v+'°</text>';}).join('');
+  const ceiling=Math.max(100,Math.ceil(Math.max(0,...points.map(p=>Number.isFinite(p.temperature)?p.temperature:0))/20)*20);
+  const grid=Array.from({length:5},(_,i)=>20+i*(ceiling-20)/4).map(v=>{const y=140-(v-20)/(ceiling-20)*130;return '<line x1="28" y1="'+y+'" x2="605" y2="'+y+'" stroke="#edf0e8" stroke-dasharray="3 5"/><text x="0" y="'+(y+3)+'">'+v+'°</text>';}).join('');
   const line=(key,min,max)=>points.filter(p=>Number.isFinite(p[key])).map((p,i,a)=>{const x=32+(a.length===1?0:i/(a.length-1))*568,y=140-Math.max(0,Math.min(1,(p[key]-min)/(max-min)))*130;return x.toFixed(1)+','+y.toFixed(1);}).join(' ');
-  return '<div class="chart"><svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" role="img" aria-label="Histórico de temperatura e rotação. Temperatura de 20 a 100 graus; ventoinha de 0 a 6000 RPM.">'+grid+(points.length?'<polyline fill="none" stroke="#83a593" stroke-width="1.8" points="'+line('rpm',0,6000)+'"/><polyline fill="none" stroke="#e9976c" stroke-width="2" points="'+line('temperature',20,100)+'"/>':'')+'<text x="30" y="153">'+(points.length?new Date(points[0].at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—')+'</text><text x="573" y="153">agora</text></svg>'+(!points.length?'<div class="chart-empty">O histórico começa com a primeira leitura.</div>':'')+'</div>';
+  return '<div class="chart"><svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" role="img" aria-label="Histórico da maior leitura bruta dos sensores. Temperatura de 20 a '+ceiling+' graus; ventoinha de 0 a 6000 RPM.">'+grid+(points.length?'<polyline fill="none" stroke="#83a593" stroke-width="1.8" points="'+line('rpm',0,6000)+'"/><polyline fill="none" stroke="#e9976c" stroke-width="2" points="'+line('temperature',20,ceiling)+'"/>':'')+'<text x="30" y="153">'+(points.length?new Date(points[0].at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—')+'</text><text x="573" y="153">agora</text></svg>'+(!points.length?'<div class="chart-empty">O histórico começa com a primeira leitura.</div>':'')+'</div>';
 }
 function profileSelect(name,cap,value,choices) { return '<select aria-label="Perfil '+name+'" data-profile="'+name+'" '+disabled(cap)+'>'+choices.map(x=>'<option value="'+x+'" '+(x===value?'selected':'')+'>'+labelProfile(x)+'</option>').join('')+'</select>'; }
 function profiles(type,choices,descriptions) {
@@ -123,31 +158,34 @@ function installation() {
 function events(items) {return items.length?items.map(e=>'<div class="event-row"><span class="event-icon">'+icon(e.kind==='warning'||e.kind==='error'?'activity':'check')+'</span><p>'+esc(e.message)+'</p><small>'+dt(e.at)+'</small></div>').join(''):empty('As ações e alterações aparecerão aqui.');}
 function eventsPage() {return '<section class="card"><h2>Comandos recentes</h2><p>Enviado não significa aplicado: o agente confirma o resultado.</p><div class="table-scroll"><table><thead><tr><th>Ação</th><th>Origem</th><th>Estado</th><th>Resultado</th></tr></thead><tbody>'+state.commands.slice(0,30).map(c=>'<tr><td>'+esc(c.action)+'</td><td>'+esc(c.source)+'</td><td>'+esc({queued:'Na fila',sent:'Enviado',done:'Aplicado',failed:'Falhou',expired:'Expirado',unknown:'Sem confirmação',interrupted:'Interrompido'}[c.status]||c.status)+'</td><td>'+esc(c.message||'—')+'</td></tr>').join('')+'</tbody></table></div></section><section class="card section-gap"><h2>Registro de atividade</h2>'+events(state.events.slice(0,80))+'</section>';}
 function empty(message) {return '<div class="empty">'+icon('server')+'<p>'+esc(message)+'</p></div>';}
-function content() {return ({overview,cooling,energy,devices,home:homePage,install:installation,events:eventsPage}[page])();}
+function content() {return ({cooling,energy,devices,home:homePage,install:installation,events:eventsPage}[page])();}
 async function refresh(force=false) {
   if(demo)return;
-  try {const previousOnline=connected(),previousMqtt=state?.mqtt.status;state=await api('state'); if(force || (!busy && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName) && (!['install','home'].includes(page)||previousOnline!==connected()||previousMqtt!==state.mqtt.status))) render();}
-  catch(e){if(e.status===401)login();else if(force)toast(e.message);}
+  try {const next=await api('state');observeState(next);state=next;if(apiFailed)toast('Conexão com o painel restabelecida.','success');apiFailed=false;if(force||!busy)render();}
+  catch(e){if(e.status===401){login();}else if(!apiFailed){apiFailed=true;toast('Não foi possível atualizar o painel. Os valores exibidos podem estar desatualizados. '+e.message,'error');}}
 }
 async function command(action,args) {
   if(demo){toast('Demonstração: nenhum comando foi enviado.');render();return;}
   busy=true;
-  try {await api('command',{hostId:host()?.id,action,args});toast('Comando enviado. A confirmação aparecerá em Atividade.');await refresh(true);}
-  catch(e){toast(e.message);}finally{busy=false;}
+  try {const cmd=await api('command',{hostId:host()?.id,action,args});previousCommands?.set(cmd.id,cmd.status);toast('Comando enviado — aguardando confirmação do agente.');await refresh(true);}
+  catch(e){toast(e.message,'error');}finally{busy=false;}
 }
 app.addEventListener('click',async event=>{
   const b=event.target.closest('button');if(!b)return;
-  if(b.dataset.page){page=b.dataset.page;render();return;}
+  if(b.dataset.page){if(page==='overview')modalOpener=b.dataset.page;page=b.dataset.page;formDirty=false;render();return;}
   if(b.dataset.range){chartRange=Number(b.dataset.range);render();return;}
   if(b.dataset.copy){const value=$('#'+b.dataset.copy)?.textContent;try{await navigator.clipboard.writeText(value);toast('Comando copiado.');}catch{toast('Selecione e copie o comando. Seu navegador exige HTTPS para copiar automaticamente.');}return;}
   if(b.dataset.action){await command(b.dataset.action,{profile:b.dataset.value});return;}
   if(b.dataset.radio){if(b.dataset.radio==='wifi'&&b.dataset.blocked==='true'&&!confirm('Desativar o Wi-Fi deste host? Conexões por Wi-Fi serão encerradas.'))return;await command('radio.set',{radio:b.dataset.radio,blocked:b.dataset.blocked==='true'});return;}
   const action=b.dataset.do;
+  if(action==='close-modal'){closeModal();return;}
   if(action==='demo'){demo=true;state=demoState();page='overview';render();}
-  if(action==='logout'){if(!demo)await api('logout',{});demo=false;pairing=null;login();}
-  if(action==='mqtt-disable'){if(demo)return toast('Demonstração: configuração não alterada.');await api('mqtt',{url:'',username:'',password:''});await refresh(true);}
-  if(action==='revoke'){if(demo)return toast('Demonstração: vínculo não alterado.');if(confirm('O agente já foi removido do host? A credencial será invalidada e as entidades MQTT removidas.'))try{await api('revoke',{hostId:host()?.id});await refresh(true);}catch(e){toast(e.message);}}
+  if(action==='logout'){try{if(!demo)await api('logout',{});demo=false;pairing=null;$('#toast').replaceChildren();login();}catch(e){toast(e.message,'error');}}
+  if(action==='mqtt-disable'){if(demo)return toast('Demonstração: configuração não alterada.');try{await api('mqtt',{url:'',username:'',password:''});formDirty=false;document.activeElement?.blur();await refresh(true);toast('Integração MQTT desativada.','success');}catch(e){toast(e.message,'error');}}
+  if(action==='revoke'){if(demo)return toast('Demonstração: vínculo não alterado.');if(confirm('O agente já foi removido do host? A credencial será invalidada e as entidades MQTT removidas.'))try{await api('revoke',{hostId:host()?.id});await refresh(true);toast('Vínculo revogado. Histórico preservado.','success');}catch(e){toast(e.message,'error');}}
 });
+app.addEventListener('input',event=>{if(event.target.closest('#mqtt-form, #pair-form'))formDirty=true;});
+app.addEventListener('error',event=>{if(event.target.tagName==='IMG')event.target.hidden=true;},true);
 app.addEventListener('change',event=>{
   const el=event.target;
   if(el.dataset.profile)command(el.dataset.profile+'.profile',{profile:el.value});
@@ -159,13 +197,13 @@ app.addEventListener('submit',async event=>{
     if(form.id==='login-form'){await api('login',{token:$('#token').value});page='overview';await refresh(true);}
     else if(form.id==='pair-form'){
       if(demo){toast('Saia da demonstração para parear seu Mac.');return;}
-      pairing=await api('pair',{url:new FormData(form).get('url')});state.publicUrl=new FormData(form).get('url');render();
+      pairing=await api('pair',{url:new FormData(form).get('url')});state.publicUrl=new FormData(form).get('url');formDirty=false;document.activeElement?.blur();render();toast('Comando de instalação gerado. Validade: 15 minutos.','success');
     }else if(form.id==='mqtt-form'){
       if(demo){toast('Demonstração: conexão não alterada.');return;}
       const fields=Object.fromEntries(new FormData(form));if(!fields.password)delete fields.password;
-      await api('mqtt',fields);await refresh(true);toast('Configuração salva. Conectando ao broker.');
+      await api('mqtt',fields);formDirty=false;document.activeElement?.blur();await refresh(true);toast('Configuração salva. O estado da conexão será confirmado separadamente.','success');
     }else if(form.id==='audio-form'){await command('audio.volume',{volume:Number(new FormData(form).get('volume'))});}
-  }catch(e){if(form.id==='login-form')login(e.message);else toast(e.message);}finally{busy=false;}
+  }catch(e){if(form.id==='login-form')login(e.message);else toast(e.message,'error');}finally{busy=false;}
 });
 await refresh(true);
 setInterval(()=>{if(state&&!demo)refresh();},5000);

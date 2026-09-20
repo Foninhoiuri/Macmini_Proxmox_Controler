@@ -31,6 +31,14 @@ test('fluxo completo: login, pareamento, heartbeat, comando, confirmação e rev
     assert.equal((await req('/agent/heartbeat',{telemetry},agent)).data.commands.length,0);
     await req('/agent/heartbeat',{telemetry,results:[{id:cmd.data.id,ok:true,message:'aplicado'}]},agent);
     const status=await req('/api/state');assert.equal(status.data.commands[0].status,'done');
+    // Expiry must become visible even when no more heartbeats arrive.
+    const queued=await req('/api/command',{hostId:id,action:'fan.profile',args:{profile:'maximum'}});
+    app.store.state.commands.find(c=>c.id===queued.data.id).expires=Date.now()-1;
+    assert.equal((await req('/api/state')).data.commands.find(c=>c.id===queued.data.id).status,'expired');
+    const sent=await req('/api/command',{hostId:id,action:'fan.profile',args:{profile:'maximum'}});
+    await req('/agent/heartbeat',{telemetry},agent);
+    app.store.state.commands.find(c=>c.id===sent.data.id).expires=Date.now()-1;
+    assert.equal((await req('/api/state')).data.commands.find(c=>c.id===sent.data.id).status,'unknown');
     assert.ok(!JSON.stringify(status.data).includes(agent));assert.ok(!JSON.stringify(status.data).includes('tokenHash'));
     assert.equal((await req('/api/revoke',{hostId:id})).status,409);
     app.store.state.hosts[id].seen=Date.now()-60000;
