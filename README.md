@@ -40,6 +40,30 @@ O container não precisa de modo privilegiado, acesso ao Docker socket, montagem
 
 **Teste sem hardware:** na tela de login, “Explorar demonstração” mostra dados explicitamente ilustrativos. Nenhuma ação nesse modo é enviada ao Mac.
 
+## Implantar pelo Portainer
+
+Em um ambiente **Docker Standalone**, crie ou atualize a stack usando **Repository**:
+
+- Repository URL: `https://github.com/Foninhoiuri/Macmini_Proxmox_Controler`
+- Repository reference: `refs/heads/main`
+- Compose path: `docker-compose.yml` (arquivo na raiz, sem `/data/compose/...`)
+
+O repositório fornece `docker-compose.yml` para o caminho padrão do Portainer e `compose.yaml` equivalente para o Docker Compose. Escolha apenas um, sem adicioná-los juntos como arquivos complementares. Ambos usam `deploy.resources.limits.memory` para o limite de 256 MB.
+
+Nas variáveis da stack, informe:
+
+```dotenv
+ADMIN_TOKEN=cole_a_chave_do_seu_env_local
+PORT=8787
+PUBLIC_URL=http://192.168.1.200:8787
+```
+
+Use a chave real do seu arquivo local. O `.env` não está no GitHub e precisa ser importado ou preenchido no Portainer. Na interface, prefira o valor completo de PUBLIC_URL, sem depender de interpolação entre variáveis. Se escolher outra porta em PORT, ajuste também a porta em PUBLIC_URL.
+
+Após atualizar o repositório, solicite ao Portainer a atualização/reimplantação da stack a partir do Git. Se receber “docker-compose.yml: no such file”, confira o **Compose path** e se a revisão mais recente foi baixada. Não é necessário criar manualmente o diretório interno `/data/compose/41`.
+
+Esta configuração faz build da imagem a partir do código. **Docker Swarm não executa esse build**: nesse caso seria necessário publicar uma imagem previamente e usar uma configuração própria para Swarm.
+
 ## Escolher as portas de comunicação
 
 | Configuração | O que define |
