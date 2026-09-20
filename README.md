@@ -52,7 +52,7 @@ Para **Docker Standalone com build local**, use `compose.yaml`. Os arquivos têm
 
 Cada alteração de código na main inicia o workflow **Testar e publicar imagem**, que roda os testes, valida a stack, constrói a imagem Linux amd64 (Mac Intel), testa o container com volume persistente e publica no GitHub Container Registry. Aguarde o workflow ficar verde antes de implantar.
 
-**Primeira publicação:** o GitHub cria pacotes de container privados por padrão. Abra o pacote **macmini_proxmox_controler → Package settings → Change visibility → Public** para o Portainer baixar sem credenciais. Isso é independente da visibilidade pública do repositório. Se preferir manter a imagem privada, configure no Portainer um registro `ghcr.io` com seu usuário GitHub e um token clássico com `read:packages`; não use ADMIN_TOKEN para autenticar no registro.
+**Acesso à imagem:** o download anônimo de `ghcr.io/foninhoiuri/macmini_proxmox_controler:latest` foi verificado após a publicação inicial; não é necessário cadastrar credenciais GHCR no Portainer para essa imagem. Em um fork ou uma publicação privada, abra o pacote **Package settings → Change visibility → Public** ou configure no Portainer um registro `ghcr.io` com seu usuário GitHub e um token clássico com `read:packages`. A visibilidade do pacote é independente da visibilidade do repositório. Não use ADMIN_TOKEN para autenticar no registro.
 
 Nas variáveis da stack, informe:
 
@@ -227,7 +227,7 @@ node tests/browser.mjs
 
 Os testes cobrem API, autorização, expiração, pareamento, MQTT com broker real de teste, fallback térmico em sysfs simulado, restauração, USB protegido, detecção de alterações, interface desktop e celular.
 
-**Situação de validação:** testes de software executados localmente; imagem Docker e instalação no Proxmox real não executadas, conforme solicitado. Não é uma validação física da ventoinha nem do firmware.
+**Situação de validação:** testes de software executados localmente e no GitHub Actions; stack Swarm validada e imagem Docker construída, executada com usuário não root e volume persistente, testada por HTTP e publicada no GHCR. O Docker do computador local não foi utilizado. Instalação no Proxmox real, ventoinha e firmware ainda dependem da validação no seu equipamento.
 
 ## Referências de implementação
 
