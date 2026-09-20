@@ -1,0 +1,23 @@
+services:
+  controller:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PORT:-8787}:8787"
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Defina ADMIN_TOKEN no arquivo .env}
+      PUBLIC_URL: ${PUBLIC_URL:?Defina PUBLIC_URL com o endereco do LXC}
+      REQUIRE_HTTPS: ${REQUIRE_HTTPS:-0}
+      MQTT_URL: ${MQTT_URL:-}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+    volumes:
+      - controller-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+volumes:
+  controller-data:

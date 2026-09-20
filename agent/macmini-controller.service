@@ -1,0 +1,30 @@
+[Unit]
+Description=Mac mini Controller hardware agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B /opt/macmini-controller/agent.py
+ExecStopPost=/usr/bin/python3 -B /opt/macmini-controller/agent.py --restore
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=25
+User=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/macmini-controller
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target
